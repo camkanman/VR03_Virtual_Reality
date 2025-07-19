@@ -1,10 +1,10 @@
-Library/
-Temp/
-Obj/
-Build/
-Builds/
-Logs/
-UserSettings/
+UAS_VR03/Library/
+UAS_VR03/Temp/
+UAS_VR03/Obj/
+UAS_VR03/Build/
+UAS_VR03/Builds/
+UAS_VR03/Logs/
+UAS_VR03/UserSettings/
 .DS_Store
 *.csproj
 *.sln
