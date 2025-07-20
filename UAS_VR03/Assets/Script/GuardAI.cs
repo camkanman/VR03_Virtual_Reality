@@ -6,22 +6,23 @@ using System.Linq;
 public class GuardAI : MonoBehaviour
 {
     [Header("Patrol Settings")]
-    public float patrolRadius = 20f; // Jarak maksimum untuk mencari waypoint
-    public float waypointTolerance = 1f; // Jarak toleransi untuk mencapai waypoint
-    public float waitTimeAtWaypoint = 2f; // Waktu tunggu di setiap waypoint (detik)
-    public bool patrolOnStart = true; // Apakah patroli langsung dimulai saat game dimulai?
-    public string waypointTag = "Waypoint"; // Tag untuk GameObject waypoint
-
-    [Header("Gizmos")]
-    public bool showGizmos = true; // Tampilkan gizmos di Scene view
-    public Color patrolAreaColor = new Color(0, 1, 0, 0.1f); // Warna area patroli
-    public Color waypointColor = Color.yellow; // Warna waypoint yang tersedia
-    public Color activeWaypointColor = Color.green; // Warna waypoint tujuan
+    public float patrolRadius = 20f;
+    public float waypointTolerance = 1f;
+    public float waitTimeAtWaypoint = 2f;
+    public bool patrolOnStart = true;
+    public string waypointTag = "Waypoint";
 
     [Header("Interaction Settings")]
-    public float doorCheckDistance = 2f; // Jarak untuk mendeteksi pintu
-    public LayerMask doorLayer; // Layer khusus untuk pintu
+    public float doorCheckDistance = 2f;
+    public LayerMask doorLayer;
 
+    // --- Deteksi Player ---
+    [Header("Detection Settings")]
+    public float detectionRadius = 8f; // Radius deteksi Guard ke Player
+    public float chaseSpeed = 8f;      // Speed saat ngejar Player
+    public float patrolSpeed = 4f;     // Speed patrol biasa
+
+    // --- Internal Variables ---
     private NavMeshAgent agent;
     private Transform[] allWaypoints;
     private Transform currentWaypoint;
@@ -29,6 +30,10 @@ public class GuardAI : MonoBehaviour
     private bool isPatrolling = false;
     private bool isWaiting = false;
     private float waitTimer = 0f;
+
+    private Door waitingDoor;
+    private Transform playerTarget;
+    private bool isChasing = false;
 
     private void Start()
     {
@@ -40,17 +45,29 @@ public class GuardAI : MonoBehaviour
             return;
         }
 
-        // Cari semua waypoint berdasarkan tag
+        // Ambil semua waypoint
         GameObject[] waypointObjects = GameObject.FindGameObjectsWithTag(waypointTag);
         allWaypoints = waypointObjects.Select(go => go.transform).ToArray();
 
-        if (allWaypoints.Length == 0)
+        // Cari Player
+        GameObject playerObj = GameObject.FindGameObjectWithTag("Player");
+        if (playerObj) playerTarget = playerObj.transform;
+
+        // Tambahkan SphereCollider sebagai deteksi (isTrigger)
+        SphereCollider col = GetComponent<SphereCollider>();
+        if (col == null)
         {
-            Debug.LogWarning("No waypoints found with tag '" + waypointTag + "'. Patrolling will be disabled.");
-            patrolOnStart = false;
+            col = gameObject.AddComponent<SphereCollider>();
+            col.isTrigger = true;
+            col.radius = detectionRadius;
+        }
+        else
+        {
+            col.isTrigger = true;
+            col.radius = detectionRadius;
         }
 
-        if (patrolOnStart)
+        if (patrolOnStart && allWaypoints.Length > 0)
         {
             StartPatrolling();
         }
@@ -58,12 +75,23 @@ public class GuardAI : MonoBehaviour
 
     private void Update()
     {
-        // Pastikan agent valid sebelum menjalankan logika apapun
         if (agent == null || !isPatrolling) return;
 
+        // Jika sedang ngejar Player
+        if (isChasing && playerTarget != null)
+        {
+            agent.speed = chaseSpeed;
+            agent.SetDestination(playerTarget.position);
+            return;
+        }
+        else
+        {
+            agent.speed = patrolSpeed;
+        }
+
+        // Patrol Logic
         if (isWaiting)
         {
-            // Tunggu di waypoint saat ini
             waitTimer -= Time.deltaTime;
             if (waitTimer <= 0f)
             {
@@ -71,13 +99,10 @@ public class GuardAI : MonoBehaviour
                 SetNewWaypoint();
             }
         }
-        // Cek jika sudah sampai di waypoint (dan agent tidak sedang menghitung path)
         else if (currentWaypoint != null && !agent.pathPending && agent.remainingDistance <= waypointTolerance)
         {
-            // Sampai di waypoint, tunggu sebentar
             WaitAtWaypoint();
         }
-        // Jika agent tidak bisa mencapai tujuan (misal, terhalang pintu)
         else if (agent.pathStatus == NavMeshPathStatus.PathPartial)
         {
             HandleBlockedPath();
@@ -87,7 +112,6 @@ public class GuardAI : MonoBehaviour
     public void StartPatrolling()
     {
         if (isPatrolling || allWaypoints.Length == 0) return;
-
         isPatrolling = true;
         agent.isStopped = false;
         SetNewWaypoint();
@@ -103,23 +127,18 @@ public class GuardAI : MonoBehaviour
 
     private void SetNewWaypoint()
     {
-        // 1. Dapatkan semua waypoint dalam radius patroli
-        List<Transform> availableWaypoints = allWaypoints.Where(wp => Vector3.Distance(transform.position, wp.position) <= patrolRadius).ToList();
-
-        // 2. Hapus waypoint sebelumnya jika ada lebih dari satu pilihan
-        if (availableWaypoints.Count > 1 && previousWaypoint != null)
-        {
-            availableWaypoints.Remove(previousWaypoint);
-        }
+        GameObject[] waypointObjects = GameObject.FindGameObjectsWithTag(waypointTag);
+        Transform[] allWaypoints = waypointObjects.Select(go => go.transform).ToArray();
+        var availableWaypoints = allWaypoints
+            .Where(wp => Vector3.Distance(transform.position, wp.position) <= patrolRadius)
+            .Where(wp => wp != previousWaypoint)
+            .ToList();
 
         if (availableWaypoints.Count == 0)
-        {
-            Debug.LogWarning(gameObject.name + ": No new waypoints found in radius. Stopping patrol.");
-            StopPatrolling();
-            return;
-        }
+            availableWaypoints = allWaypoints.Where(wp => wp != previousWaypoint).ToList();
+        if (availableWaypoints.Count == 0)
+            availableWaypoints = allWaypoints.ToList();
 
-        // 3. Pilih waypoint baru secara acak dan set sebagai tujuan
         previousWaypoint = currentWaypoint;
         currentWaypoint = availableWaypoints[Random.Range(0, availableWaypoints.Count)];
         agent.SetDestination(currentWaypoint.position);
@@ -129,53 +148,53 @@ public class GuardAI : MonoBehaviour
     {
         isWaiting = true;
         waitTimer = waitTimeAtWaypoint;
-    }
-
-    private void HandleBlockedPath()
-    {
-        // Lakukan raycast ke depan untuk mendeteksi pintu
-        RaycastHit hit;
-        if (Physics.Raycast(transform.position + Vector3.up * 0.5f, transform.forward, out hit, doorCheckDistance, doorLayer))
+        // Tutup pintu jika sudah cukup jauh dari pintu
+        if (waitingDoor != null && waitingDoor.IsOpen)
         {
-            Door door = hit.collider.GetComponentInParent<Door>();
-            // Jika pintu ditemukan dan sedang tertutup, buka pintu
-            if (door != null && !door.IsOpen)
+            float dist = Vector3.Distance(transform.position, waitingDoor.transform.position);
+            if (dist > 2f)
             {
-                Debug.Log("[GuardAI] Pintu terdeteksi, mencoba membuka.");
-                door.Interact(transform);
+                waitingDoor.CloseDoor();
+                waitingDoor = null;
             }
         }
     }
 
-    // Menggambar gizmos di Scene view
-    private void OnDrawGizmosSelected()
+    private void HandleBlockedPath()
     {
-        if (!showGizmos) return;
+        RaycastHit hit;
+        Vector3 rayOrigin = transform.position + Vector3.up * 0.5f;
+        Vector3 toWaypoint = (currentWaypoint.position - transform.position).normalized;
 
-        // Gambar area patroli
-        Gizmos.color = patrolAreaColor;
-        Gizmos.DrawSphere(transform.position, patrolRadius);
-
-        // Gambar waypoint yang tersedia dan waypoint tujuan
-        if (allWaypoints != null)
+        if (Physics.Raycast(rayOrigin, toWaypoint, out hit, doorCheckDistance, doorLayer, QueryTriggerInteraction.Collide))
         {
-            foreach (Transform waypoint in allWaypoints)
+            Door door = hit.collider.GetComponentInParent<Door>();
+            if (door != null && !door.IsOpen)
             {
-                if (Vector3.Distance(transform.position, waypoint.position) <= patrolRadius)
-                {
-                    if (Application.isPlaying && waypoint == currentWaypoint)
-                    {
-                        Gizmos.color = activeWaypointColor;
-                        Gizmos.DrawWireSphere(waypoint.position, 1f);
-                        Gizmos.DrawLine(transform.position, waypoint.position);
-                    }
-                    else
-                    {
-                        Gizmos.color = waypointColor;
-                        Gizmos.DrawWireSphere(waypoint.position, 0.5f);
-                    }
-                }
+                Debug.Log("[GuardAI] Pintu terdeteksi di jalur waypoint, mencoba membuka.");
+                door.Interact(transform);
+                waitingDoor = door;
             }
+        }
+    }
+
+    // --- Area Deteksi Player: Ngejar kalau Player masuk, patrol kalau keluar ---
+    private void OnTriggerEnter(Collider other)
+    {
+        if (other.CompareTag("Player"))
+        {
+            isChasing = true;
+            Debug.Log($"{gameObject.name} mulai mengejar Player!");
+        }
+    }
+
+    private void OnTriggerExit(Collider other)
+    {
+        if (other.CompareTag("Player"))
+        {
+            isChasing = false;
+            Debug.Log($"{gameObject.name} berhenti mengejar, kembali patrol.");
+            SetNewWaypoint();
         }
     }
 }
